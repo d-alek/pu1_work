@@ -28,13 +28,13 @@ Aleks Dakic
 ![`CancerGenes_summ2.png`](3_heatmaps_set_member/1_cancer_aml_cml/CancerGenes_summ2.png)
 
 
-![`protein kineses_summ.png`](3_heatmaps_set_member/4_protein_kinases/protein kineses_summ.png)
+![`protein kineses_summ.png`](3_heatmaps_set_member/4_protein_kinases/protein_kineses_summ.png)
 
 
-![`transcription factor_summ1.png`](3_heatmaps_set_member/5_transcription_factors/transcription factor_summ1.png)
+![`transcription_factor_summ1.png`](3_heatmaps_set_member/5_transcription_factors/transcription_factor_summ1.png)
 
 
-![`transcription factor_summ2.png`](3_heatmaps_set_member/5_transcription_factors/transcription factor_summ2.png)
+![`transcription_factor_summ2.png`](3_heatmaps_set_member/5_transcription_factors/transcription_factor_summ2.png)
 
 
 ![`BubblePlots3.1.all_CaG_GSEA.png`](4_DE_pu1bind_over_sets/BubblePlots3.1.all_CaG_GSEA.png)
@@ -43,27 +43,27 @@ Aleks Dakic
 ![`BubblePlots3.4.a_KEGG1.png`](4_DE_pu1bind_over_sets/BubblePlots3.4.a_KEGG1.png)
 
 
-![`05221 Acute myeloid leukemia.png`](5_PathWiew maps DE overlay/1_cancer_pathways/05221 Acute myeloid leukemia.png)
+![`Acute_myeloid_leukemia.png`](5_PathWiew_maps_DE_overlay/1_cancer_pathways/AcuteMyeloidLeukemia.png)
 
 
-![`mmu05200.pathview.multi.png`](5_PathWiew maps DE overlay/1_cancer_pathways/mmu05200.pathview.multi.png)
+![`mmu05200.pathview.multi.png`](5_PathWiew_maps_DE_overlay/1_cancer_pathways/mmu05200.pathview.multi.png)
 
 
-![`mmu05202.pathview.multi.png`](5_PathWiew maps DE overlay/1_cancer_pathways/mmu05202.pathview.multi.png)
+![`mmu05202.pathview.multi.png`](5_PathWiew_maps_DE_overlay/1_cancer_pathways/mmu05202.pathview.multi.png)
 
 
-![`04110 Cell cycle.png`](5_PathWiew maps DE overlay/2_repair_ccycle_apoptosis/04110 Cell cycle.png)
+![`Cell_cycle.png`](5_PathWiew_maps_DE_overlay/2_repair_ccycle_apoptosis/Cell_cycle.png)
 
 
-![`04210 Apoptosis.png`](5_PathWiew maps DE overlay/2_repair_ccycle_apoptosis/04210 Apoptosis.png)
+![`Apoptosis.png`](5_PathWiew_maps_DE_overlay/2_repair_ccycle_apoptosis/Apoptosis.png)
 
 
-![`04010 MAPK signaling pathway.png`](5_PathWiew maps DE overlay/3_signalling/04010 MAPK signaling pathway.png)
+![`MAPK_signaling_pathway.png`](5_PathWiew_maps_DE_overlay/3_signalling/MAPK_signaling_pathway.png)
 
 
-![`04151 PI3K-Akt signaling pathway.png`](5_PathWiew maps DE overlay/3_signalling/04151 PI3K-Akt signaling pathway.png)
+![`PI3K_Akt_signaling_pathway.png`](5_PathWiew_maps_DE_overlay/3_signalling/PI3K_Akt_signaling_pathway.png)
 
 
-![`04630 Jak-STAT signaling pathway.png`](5_PathWiew maps DE overlay/3_signalling/04630 Jak-STAT signaling pathway.png)
+![`Jak_STAT_signaling_pathway.png`](5_PathWiew_maps_DE_overlay/3_signalling/Jak_STAT_signaling_pathway.png)
 
 
