@@ -1,0 +1,551 @@
+### DE workflow ###
+#1 background:
+genetics <- factor(c("wt", "wt", "ko", "ko", "aml", "aml"))
+grouping <- genetics
+
+design <- model.matrix(~genetics)
+colnames(design) <- c("Intercept", "KO", "WT")
+options(width=125)
+design
+# this works if it is a connection
+# count.file <- '../../genic_counts.tsv'
+# originals<-strsplit(readLines(count.file, 1), '\t')[[1]]
+count.file <- read.table("genic_counts.tsv", header=T, sep="\t", quote="")
+originals = c("GeneID", "ADR1_l1", "ADR2_l1", "ADR3_l1", "ADR4_l1", "ADR5_l1", "ADR6_l1")
+originals
+if (length(originals)!=nrow(design)) { originals<-originals[-1] }
+data.frame(originals, genetics)
+
+#2 preparing libraries
+counts <- read.table("genic_counts.tsv", row.names=1, header=TRUE) # again from start file
+gene.names <- rownames(counts)
+for (treatment in unique(grouping)) {
+   matches <- which(grouping==treatment)
+   colnames(counts)[matches]<-paste(treatment, 1:length(matches), sep='.')
+   }
+nrow(counts)
+head(counts, 10)
+rm(count.file)
+# gene symbols and names (acc. to Entrez ID)
+source("http://bioconductor.org/biocLite.R")
+biocLite("org.Mm.eg.db")
+require(org.Mm.eg.db)
+genes <- select(org.Mm.eg.db, keys=gene.names, col=c('SYMBOL', 'GENENAME'), keytype='ENTREZID')
+colnames(genes) <- c('GeneID', 'Symbol', 'GeneName')
+head(genes, 10)
+orig.counts <- counts
+attr(orig.counts, 'symbol') <- genes$Symbol
+# sex effects
+counts[grep('^Xist$', genes$Symbol, ignore.case=TRUE),]
+# Ig
+gname <- select(org.Mm.eg.db, keys=genes$GeneID, col='GENENAME', keytype='ENTREZID')
+failed <- grepl("immunoglobulin", gname$GENENAME, ignore.case=TRUE) & grepl("variable", gname$GENENAME, ignore.case=TRUE)
+failed <- failed & grepl('^ig', genes$Symbol, ignore.case=TRUE)
+head(genes[failed,], 10)
+counts <- counts[!failed,]
+genes <- genes[!failed,]
+nrow(counts)
+# low abundance genes
+require(edgeR)
+##keep <- aveLogCPM(counts, dispersion = 0.05) >= log2(1)
+##counts <- counts[keep,]
+##genes <- genes[keep,]
+##nrow(counts)
+# in this case probably better as:
+keep <- rowSums(cpm(counts)>2.5) >= 2
+sum(keep)
+[1] 11176 # of 27179 i.e. 26953 after Ig removal
+counts <- counts[keep,]
+genes <- genes[keep,]
+nrow(counts)
+
+# also keepp if norm rpkm >= 3 in 2 or more; those norm rpkm are created before any removals 27179..!
+rpkm.file <- read.table("norm_rpkm.tsv", row.names=1, header=T, sep="\t", quote="")
+rpkm.file <- rpkm.file[,2:7]
+keepp <- rowSums(rpkm.file>3) >= 2 | rowSums(rpkm.file>6) >= 1
+sum(keepp)
+[1] 9752 # of 27179
+rpkm.3 <- rpkm.file[keepp, ]
+# then below ask index = is.element(de2, rownames(rpkm.3)); de[index, ]
+
+all.g <- DGEList(counts, group=grouping, genes=genes) # "counts" to "all.g"
+
+#3 exploring 
+plotMDS(all.g, col=rainbow(length(unique(grouping)))[factor(grouping)])
+#4 normalisation
+all.g <- calcNormFactors(all.g)
+all.g$samples
+# plotting pre- & post-normalisation
+temp <- all.g
+lib.names <- rownames(temp$samples)
+temp$samples$group<-factor(lib.names)
+ma.fnames <- NULL
+current <- 1L
+for (other in 2:length(lib.names)) {
+   cur.fname <- tempfile(tmpdir='plots-rnaseq', pattern='ma_', fileext='.png')
+       png(cur.fname)
+   plotSmear(temp, pair=c(lib.names[current], lib.names[other]), cex.lab=1.4, cex.axis=1.2)
+   dev.off()
+   ma.fnames <- append(ma.fnames, cur.fname) 
+   }
+
+cur.fname <- tempfile(tmpdir='plots-rnaseq', pattern='ma_', fileext='.png')
+png(cur.fname)
+plotSmear(temp, pair=c(lib.names[3], lib.names[4]), cex.lab=1.4, cex.axis=1.2) > dev.off()
+ma.fnames <- append(ma.fnames, cur.fname)
+cur.fname <- tempfile(tmpdir='plots-rnaseq', pattern='ma_', fileext='.png')
+png(cur.fname)
+plotSmear(temp, pair=c(lib.names[3], lib.names[5]), cex.lab=1.4, cex.axis=1.2) > dev.off()
+ma.fnames <- append(ma.fnames, cur.fname)
+cur.fname <- tempfile(tmpdir='plots-rnaseq', pattern='ma_', fileext='.png')
+png(cur.fname)
+plotSmear(temp, pair=c(lib.names[5], lib.names[6]), cex.lab=1.4, cex.axis=1.2) > dev.off()
+ma.fnames <- append(ma.fnames, cur.fname)
+
+#5 dispersion using edgeR
+install.packages("statmod")
+require(statmod)
+all.g <- estimateDisp(all.g, design, robust=TRUE)
+sqrt(all.g$common)
+plotBCV(all.g)
+o <- order(all.g$prior.df)
+most100var = head(data.frame(all.g$genes[o,], BCV=sqrt(all.g$tagwise[o])), 100)
+write.table(most100var, file="most100var.txt", sep="\t", quote=FALSE, row.names=FALSE)
+
+
+eb.shrunk <- glmQLFit(all.g, design, robust=TRUE)
+plotQLDisp(eb.shrunk)
+summary(eb.shrunk$var.post)
+summary(eb.shrunk$df.prior)
+
+#6 modelling mean-variance using voom
+v.all.g <- voom(all.g, design, plot=TRUE, normalize.method='cyclicloess')
+lmv.fit <- lmFit(v.all.g, design)
+lmv.fit <- eBayes(lmv.fit, robust=TRUE)
+summary(lmv.fit$df.prior)
+
+#7 testing for DE using limma
+
+#7.1 wt-ko
+contrast <- c(0, -1, 1)
+contrast <- c(0, 1, -1) # to get direction rel to KO
+fit2 <- contrasts.fit(lmv.fit, contrasts=contrast)
+fit2 <- eBayes(fit2, robust=TRUE)
+de2 <- topTable(fit2, n=Inf)
+de2.rpkm <- merge(de2, rpkm.file, by="row.names", sort=FALSE)
+de2.rpkm <- de2.rpkm[,2:16]
+head(de2.rpkm)
+..
+de2.rpkm.3 <- merge(de2, rpkm.3, by="row.names", sort=FALSE)
+de2.rpkm.3 <- de2.rpkm.3[,2:16]
+head(de2.rpkm.3)
+..
+de.sum <- decideTests(fit2, p=0.01)
+summary(de.sum)
+... 
+options(width=125, digits=3)
+v.all.g$E[match(de2$GeneID[1:10], v.all.g$genes$GeneID),]
+
+de.sum <- decideTests(fit2, p=0.01, lfc=2)
+limma::plotMA(fit2, status=de.sum, legend=FALSE, cex=0.5, col=c('red', 'blue'), values=c(-1,1))
+abline(h = c(-1, 1), col = 'dodgerblue')
+... 
+write.table(de2.rpkm, file='voom_WTvKO.txt', row.names=FALSE, sep='\t', quote=FALSE)
+write.table(de2.rpkm.3, file='voom_WTvKO_rpkm3.txt', row.names=FALSE, sep='\t', quote=FALSE)
+
+# wt-ko gene set tests (in all of them interpret up = down etc.) !!!
+contrast <- c(0, -1, 1)
+# to fix that:
+contrast <- c(0, 1, -1)
+# GO unadjusted:
+go <- goana(fit2, FDR=0.01, species="Mm", trend=FALSE)
+topgo <- topGO(go, ont="MF", number=Inf)
+write.table(topgo, file='GO_wtVko_MF_unadjust.tsv', row.names=FALSE, sep='\t', quote=FALSE)
+topgo <- topGO(go, ont="BP", number=Inf)
+write.table(topgo, file='GO_wtVko_BP_unadjust.tsv', row.names=FALSE, sep='\t', quote=FALSE)
+# GO adjusted for gene abundance:
+install.packages("BiasedUrn")
+go <- goana(fit2, FDR=0.01, species="Mm", trend=TRUE)
+topgo <- topGO(go, ont="MF", number=Inf)
+write.table(topgo, file='GO_wtVko_MF_abundanceAdj.tsv', row.names=FALSE, sep='\t', quote=FALSE)
+topgo <- topGO(go, ont="BP", number=Inf)
+write.table(topgo, file='GO_wtVko_BP_abundanceAdj.tsv', row.names=FALSE, sep='\t', quote=FALSE)
+# GO adjusted for gene lengths:
+# first creating vector of fit2 gene lengths in that order:
+all.lengths = read.table(file="all.gene.lengths.txt", header=T)
+fit2.genes = as.data.frame(fit2$genes)[,1:2]
+index = is.element(all.lengths$GeneID, fit2.genes$GeneID)
+fit2.lengths = all.lengths[index, ]
+lengths = merge(fit2.genes, fit2.lengths, by="GeneID", all=F, sort=FALSE)
+
+go <- goana(fit2, FDR=0.01, species="Mm", trend=as.numeric(lengths$Length))
+topgo <- topGO(go, ont="MF", number=Inf)
+write.table(topgo, file='GO_wtVko_MF_lengthAdj.tsv', row.names=FALSE, sep='\t', quote=FALSE)
+topgo <- topGO(go, ont="BP", number=Inf)
+write.table(topgo, file='GO_wtVko_BP_lengthAdj.tsv', row.names=FALSE, sep='\t', quote=FALSE)
+
+# KEGG unadjusted:
+biocLite("KEGGREST")
+require("KEGGREST")
+kegg <- kegga(fit2, FDR=0.01, species="Mm", trend=FALSE)
+topkegg <- topKEGG(kegg, number=Inf)
+write.table(topkegg, file='KEGG_wtVko_unadjust.tsv', row.names=FALSE, sep='\t', quote=FALSE)
+# KEGG adjusted for gene abundance:
+install.packages("BiasedUrn")
+kegg <- kegga(fit2, FDR=0.01, species="Mm", trend=TRUE)
+topkegg <- topKEGG(kegg, number=Inf)
+write.table(topkegg, file='KEGG_wtVko_abundanceAdj.tsv', row.names=FALSE, sep='\t', quote=FALSE)
+# KEGG adjusted for gene lengths:
+kegg <- kegga(fit2, FDR=0.01, species="Mm", trend=as.numeric(lengths$Length))
+topkegg <- topKEGG(kegg, number=Inf)
+write.table(topkegg, file='KEGG_wtVko_lengthAdj.tsv', row.names=FALSE, sep='\t', quote=FALSE)
+
+# roast, camera, romer:
+# roast:
+load("mouse_c2_v5p1.rdata") #as Mm.c2
+curated.ind <- ids2indices(Mm.c2, all.g$genes$GeneID)
+load("mouse_H_v5p1.rdata") #as Mm.H
+curated.ind <- ids2indices(Mm.H, all.g$genes$GeneID)
+load("mouse_c3_v5p1.rdata") #as Mm.c3
+curated.ind <- ids2indices(Mm.c3, all.g$genes$GeneID) # leave name as "curated" for easier repetition
+
+roas = mroast(all.g, curated.ind, design, contrast, nrot=9999)
+head(roas)
+write.table(roas, file='Roast_wtVko_Curated.tsv', row.names=TRUE, sep='\t', quote=FALSE)
+barcodeplot(fit2$t[,1], curated.ind$"REACTOME_POL_SWITCHING", main="REACTOME_POL_SWITCHING")
+# camera:
+came = camera(all.g, curated.ind, design, contrast, inter.gene.cor=0.01) #if cor=NULL no signif FDR
+head(came)
+write.table(came, file='Camera_wtVko_Curated.tsv', row.names=TRUE, sep='\t', quote=FALSE)
+
+i = curated.ind$"BIOCARTA_CHEMICAL_PATHWAY"
+# fit2$genes$Symbol[i] # gives a list of gene symbols
+h1 = fit2$genes[i,] # gives a list of gene IDs, symbols, gene names
+write.table(h1, file='BIOCARTA_CHEMICAL_PATHWAY.txt', row.names=FALSE, sep='\t', quote=FALSE)
+
+
+
+status <- rep("Other",nrow(fit2))
+i = curated.ind$HALLMARK_DNA_REPAIR # up is actually down here 
+fit2$genes$Symbol[i] # gives a list of genes
+status[i] <- "AML cluster 5"
+plotMD(fit2,column=1,status=status,values=c("HALLMARK_DNA_REPAIR"),hl.col=c("red"), main="HALLMARK_DNA_REPAIR", legend="bottomright")
+abline(h=0,col="darkgrey")
+
+#romer:
+rome = romer(all.g, curated.ind, design, contrast, set.statistic="mean50", nrot=9999)
+write.table(rome, file='Romer_wtVko_Motif.tsv', row.names=TRUE, sep='\t', quote=FALSE)
+topRome = topRomer(rome, n=5000, alternative="down")
+head(topRome)
+write.table(topRome, file='Romer_wtVko_DOWN_Motif.tsv', row.names=TRUE, sep='\t', quote=FALSE)
+..
+barcodeplot(fit2$t[,1], curated.ind$"V$AML_Q6", main="Runx1")
+barcodeplot(fit2$t[,1], curated.ind$HALLMARK_TGF_BETA_SIGNALING, main=expression("INTERFERON-"*gamma~ "RESPONSE"))
+
+barcodeplot(fit4$t[,1], curated.ind$HALLMARK_HEDGEHOG_SIGNALING, main="HEDGEHOG SIGNALING")
+barcodeplot(fit2$t[,1], curated.ind$HALLMARK_WNT_BETA_CATENIN_SIGNALING, main=expression("WNT/"*beta*"-CATENIN SIGNALING"))
+
+# Do the same with onco and hallmark sets !!!
+...
+
+#7.2 wt-aml
+contrast <- c(0, 0, 1)
+fit3 <- contrasts.fit(lmv.fit, contrasts=contrast)
+fit3 <- eBayes(fit3, robust=TRUE)
+de3 <- topTable(fit3, n=Inf)
+head(de3)
+de3.rpkm <- merge(de3, rpkm.file, by="row.names", sort=FALSE)
+de3.rpkm <- de3.rpkm[,2:16]
+head(de3.rpkm)
+..
+de3.rpkm.3 <- merge(de3, rpkm.3, by="row.names", sort=FALSE)
+de3.rpkm.3 <- de3.rpkm.3[,2:16]
+head(de3.rpkm.3)
+..
+de.sum <- decideTests(fit3, p=0.01, lfc=2)
+summary(de.sum)
+..
+options(width=125, digits=3)
+v.all.g$E[match(de3$GeneID[1:10], v.all.g$genes$GeneID),]
+de.sum <- decideTests(fit3, p=0.05, lfc=2)
+limma::plotMA(fit3, status=de.sum, legend=FALSE, cex=0.5, col=c('red', 'blue'), values=c(-1,1))
+abline(h = c(-1, 1), col = 'dodgerblue')
+write.table(de3.rpkm, file='voom_WTvAML.txt', row.names=FALSE, sep='\t', quote=FALSE)
+write.table(de3.rpkm.3, file='voom_WTvAML_rpkm3.txt', row.names=FALSE, sep='\t', quote=FALSE)
+
+#7.3 ko-aml
+contrast <- c(0, 1, 0)
+contrast <- c(0, -1, 0) # to get direction rel to AML
+fit4 <- contrasts.fit(lmv.fit, contrasts=contrast)
+fit4 <- eBayes(fit4, robust=TRUE)
+de4 <- topTable(fit4, n=Inf)
+head(de4)
+de4.rpkm <- merge(de4, rpkm.file, by="row.names", sort=FALSE)
+de4.rpkm <- de4.rpkm[,2:16]
+head(de4.rpkm)
+..
+de4.rpkm.3 <- merge(de4, rpkm.3, by="row.names", sort=FALSE)
+de4.rpkm.3 <- de4.rpkm.3[,2:16]
+head(de4.rpkm.3)
+..
+de.sum <- decideTests(fit4, p=0.05, lfc=2)
+summary(de.sum)
+..
+options(width=125, digits=3)
+v.all.g$E[match(de4$GeneID[1:10], v.all.g$genes$GeneID),]
+de.sum <- decideTests(fit4, p=0.01)
+limma::plotMA(fit4, status=de.sum, legend=FALSE, cex=0.5, col=c('red', 'blue'), values=c(-1,1))
+abline(h = c(-1, 1), col = 'dodgerblue')
+write.table(de4.rpkm, file='voom_KOvAML.txt', row.names=FALSE, sep='\t', quote=FALSE)
+write.table(de4.rpkm.3, file='voom_KOvAML_rpkm3.txt', row.names=FALSE, sep='\t', quote=FALSE)
+
+# ko-aml gene set tests (in all of them interpret up = down etc.) !!!
+contrast <- c(0, 1, 0)
+# to fix that:
+contrast <- c(0, -1, 0)
+# GO unadjusted:
+go <- goana(fit4, FDR=0.01, species="Mm", trend=FALSE)
+topgo <- topGO(go, ont="MF", number=Inf)
+write.table(topgo, file='GO_koVaml_MF_unadjust.tsv', row.names=FALSE, sep='\t', quote=FALSE)
+topgo <- topGO(go, ont="BP", number=Inf)
+write.table(topgo, file='GO_koVaml_BP_unadjust.tsv', row.names=FALSE, sep='\t', quote=FALSE)
+# GO adjusted for gene abundance:
+install.packages("BiasedUrn")
+require("BiasedUrn")
+go <- goana(fit4, FDR=0.01, species="Mm", trend=TRUE)
+topgo <- topGO(go, ont="MF", number=Inf)
+write.table(topgo, file='GO_koVaml_MF_abundanceAdj.tsv', row.names=FALSE, sep='\t', quote=FALSE)
+topgo <- topGO(go, ont="BP", number=Inf)
+write.table(topgo, file='GO_koVaml_BP_abundanceAdj.tsv', row.names=FALSE, sep='\t', quote=FALSE)
+# GO adjusted for gene lengths:
+# first creating vector of fit2 gene lengths in that order:
+all.lengths = read.table(file="all.gene.lengths.txt", header=T)
+fit4.genes = as.data.frame(fit4$genes)[,1:2]
+index = is.element(all.lengths$GeneID, fit4.genes$GeneID)
+fit4.lengths = all.lengths[index, ]
+lengths = merge(fit4.genes, fit4.lengths, by="GeneID", all=F, sort=FALSE)
+
+go <- goana(fit4, FDR=0.01, species="Mm", trend=as.numeric(lengths$Length))
+topgo <- topGO(go, ont="MF", number=Inf)
+write.table(topgo, file='GO_koVaml_MF_lengthAdj.tsv', row.names=FALSE, sep='\t', quote=FALSE)
+topgo <- topGO(go, ont="BP", number=Inf)
+write.table(topgo, file='GO_koVaml_BP_lengthAdj.tsv', row.names=FALSE, sep='\t', quote=FALSE)
+
+# KEGG unadjusted:
+biocLite("KEGGREST")
+require("KEGGREST")
+kegg <- kegga(fit4, FDR=0.01, species="Mm", trend=FALSE)
+topkegg <- topKEGG(kegg, number=Inf)
+write.table(topkegg, file='KEGG_koVaml_unadjust.tsv', row.names=FALSE, sep='\t', quote=FALSE)
+# KEGG adjusted for gene abundance:
+install.packages("BiasedUrn")
+kegg <- kegga(fit4, FDR=0.01, species="Mm", trend=TRUE)
+topkegg <- topKEGG(kegg, number=Inf)
+write.table(topkegg, file='KEGG_koVaml_abundanceAdj.tsv', row.names=FALSE, sep='\t', quote=FALSE)
+# KEGG adjusted for gene lengths:
+kegg <- kegga(fit4, FDR=0.01, species="Mm", trend=as.numeric(lengths$Length))
+topkegg <- topKEGG(kegg, number=Inf)
+write.table(topkegg, file='KEGG_koVaml_lengthAdj.tsv', row.names=FALSE, sep='\t', quote=FALSE)
+
+# roast, camera, romer:
+# roast:
+load("mouse_c3_v5p1.rdata") #as Mm.c3
+curated.ind <- ids2indices(Mm.c3, all.g$genes$GeneID)
+load("mouse_H_hallmark_v5.rdata") #as Mm.H
+curated.ind <- ids2indices(Mm.H, all.g$genes$GeneID)
+load("mouse_c6_onco_v5.rdata") #as Mm.c6
+curated.ind <- ids2indices(Mm.c6, all.g$genes$GeneID) # leave name as "curated" for easier repetition
+
+roas = mroast(all.g, curated.ind, design, contrast, nrot=9999)
+head(roas)
+write.table(roas, file='Roast_koVaml_Curated.tsv', row.names=TRUE, sep='\t', quote=FALSE)
+barcodeplot(fit4$t[,1], curated.ind$HALLMARK_P53_PATHWAY, main="HALLMARK_P53_PATHWAY")
+barcodeplot(fit4$t[,1], curated.ind$YU_MYC_TARGETS_DN, main="YU_MYC_TARGETS_DN")
+
+# camera:
+came = camera(all.g, curated.ind, design, contrast, inter.gene.cor=0.01) #if cor=NULL no signif FDR
+head(came)
+write.table(came, file='Camera_koVaml_Curated.tsv', row.names=TRUE, sep='\t', quote=FALSE)
+
+i = curated.ind$ONGUSAHA_BRCA1_TARGETS_UP # up is actually down here 
+fit4$genes$Symbol[i] # gives a list of genes
+
+status <- rep("Other",nrow(fit2))
+i = curated.ind$HESS_TARGETS_OF_HOXA9_AND_MEIS1_UP # up is actually down here 
+fit4$genes$Symbol[i] # gives a list of genes
+status[i] <- "TARGETS OF HOXA9 AND MEIS1 UP"
+plotMD(fit4,column=1,status=status,values=c("TARGETS OF HOXA9 AND MEIS1 UP"),hl.col=c("red"), main="TARGETS OF HOXA9 AND MEIS1 UP", legend="bottomright")
+abline(h=0,col="darkgrey")
+
+#romer:
+rome = romer(all.g, curated.ind, design, contrast, set.statistic="mean50", nrot=9999)
+write.table(rome, file='Romer_koVaml_Curated.tsv', row.names=TRUE, sep='\t', quote=FALSE)
+topRome = topRomer(rome, n=5000, alternative="down")
+head(topRome)
+write.table(topRome, file='Romer_koVaml_DOWN_Curated.tsv', row.names=TRUE, sep='\t', quote=FALSE)
+..
+barcodeplot(fit4$t[,1], curated.ind$HALLMARK_MYC_TARGETS_V2, main="HALLMARK_MYC_TARGETS_V1")
+
+
+# Do the same with onco and hallmark sets !!!
+...
+
+
+# all comparison !!!
+contrast <- cbind(WTvKO = c(0, -1, 1), KOvAML = c(0, 1, 0))
+fit5 <- contrasts.fit(lmv.fit, contrasts=contrast)
+fit5 <- eBayes(fit5, robust=TRUE)
+de5 <- topTable(fit5, n=Inf)
+head(de5)
+de5.rpkm <- merge(de5, rpkm.file, by="row.names", sort=FALSE)
+de5.rpkm <- de5.rpkm[,2:16]
+head(de5.rpkm)
+..
+de5.rpkm.3 <- merge(de5, rpkm.3, by="row.names", sort=FALSE)
+de5.rpkm.3 <- de5.rpkm.3[,2:16]
+head(de5.rpkm.3)
+..
+all.signs <- fit5$coefficients[p.adjust(fit5$F.p.value, method='BH') < 0.02,,drop=FALSE] > 0
+rownames(all.signs) <- NULL
+sign.order <- do.call(order, split(as.integer(all.signs), col(all.signs)))
+is.diff <- FALSE
+for (x in 1:ncol(all.signs)) { is.diff <- is.diff | diff(all.signs[sign.order,x])!=0L }
+is.diff <- c(TRUE, is.diff)
+cbind(ifelse(all.signs[sign.order[is.diff],,drop=FALSE], 1, -1), tabulate(cumsum(is.diff)))
+..
+options(width=125, digits=3)
+v.all.g$E[match(de5$GeneID[1:10], v.all.g$genes$GeneID),]
+write.table(de5.rpkm, file='voom_All_rpkm.txt', row.names=FALSE, sep='\t', quote=FALSE)
+write.table(de5.rpkm.3, file='voom_All_rpkm3.txt', row.names=FALSE, sep='\t', quote=FALSE)
+
+#8 recording average expression of all ~ 27000 genes
+temp <- DGEList(orig.counts, lib.size=all.g$samples$lib.size, norm.factors=all.g$samples$norm.factors)
+output <- data.frame(GeneID=rownames(orig.counts), Symbol=attr(orig.counts, 'symbol'), cpm(temp))
+write.table(output, file='norm_cpm.tsv', row.names=FALSE, quote=FALSE, sep='\t')
+head(output)
+output <- data.frame(GeneID=rownames(orig.counts), Symbol=attr(orig.counts, 'symbol'), cpm(temp,log=T,prior.count=1))
+write.table(output, file='norm_log_cpm.tsv', row.names=FALSE, quote=FALSE, sep='\t')
+head(output)
+
+design.x <- model.matrix(~0 + genetics)
+v.x <- voom(all.g, design.x, normalize.method='none')
+fit.x <- lmFit(v.x, design.x)
+gunk <- read.table('voom_WTvKO.txt', header=TRUE, sep='\t', fill=TRUE, quote='')
+o <- match(gunk$GeneID, fit.x$genes$GeneID)
+write.table(data.frame(GeneID=gunk$GeneID, fit.x$coefficients[o,]), row.names=FALSE, quote=FALSE, sep='\t', file='cpm_WTvKO.txt')
+gunk <- read.table('voom_KOvAML.txt', header=TRUE, sep='\t', fill=TRUE, quote='')
+o <- match(gunk$GeneID, fit.x$genes$GeneID)
+write.table(data.frame(GeneID=gunk$GeneID, fit.x$coefficients[o,]), row.names=FALSE, quote=FALSE, sep='\t', file='cpm_KOvAML.txt')
+
+# getting RPKMs:
+mm10 = getInBuiltAnnotation(annotation="mm10") # from Rsubread
+head(mm10)
+exonLen = mm10$End-mm10$Start
+mm10$exonLen = exonLen
+head(mm10)
+mmm10 = aggregate(mm10$exonLen,by=list(mm10$GeneID),FUN=sum,simplify=F)
+head(mmm10)
+colnames(mmm10) = c("GeneID", "Length")
+mm10 = mmm10
+write.table(as.matrix(mm10), file='all.gene.lengths.txt', row.names=FALSE, quote=FALSE, sep='\t')
+geness = merge(genes,mm10,by="GeneID",sort=F)
+orig.countss = orig.counts
+orig.countss$GeneID = rownames(orig.countss)
+orig.countss = merge(orig.countss,mm10,by="GeneID",sort=F)
+orig.countss$Length = as.numeric(orig.countss$Length)
+write.table(orig.countss, file='orig.counts.lengths.txt', row.names=FALSE, quote=FALSE, sep='\t')
+mean(orig.countss$Length) # 2525 bp !!!
+
+rpkm(x, gene.length=NULL, normalized.lib.sizes=TRUE, log=FALSE, prior.count=0.25, ...)
+temp <- DGEList(orig.counts, lib.size=all.g$samples$lib.size, norm.factors=all.g$samples$norm.factors, genes=orig.countss)
+output <- data.frame(GeneID=rownames(orig.counts), Symbol=attr(orig.counts, 'symbol'), rpkm(temp,log=F,gene.length=as.numeric(temp$genes$Length)))
+head(output)
+write.table(output, file='norm_rpkm.tsv', row.names=FALSE, quote=FALSE, sep='\t')
+output <- data.frame(GeneID=rownames(orig.counts), Symbol=attr(orig.counts, 'symbol'), rpkm(temp,log=T,gene.length=as.numeric(temp$genes$Length),prior.count=1))
+head(output)
+write.table(output, file='norm_log_rpkm.tsv', row.names=FALSE, quote=FALSE, sep='\t')
+
+#9 DE genes clustering
+WTvAML <- read.delim('voom_WTvAML.txt', header=TRUE) 
+WTvAML <- WTvAML[order(WTvAML$GeneID),]
+WTvKO <- read.delim('voom_WTvKO.txt', header=TRUE)
+WTvKO <- WTvKO[order(WTvKO$GeneID),]
+KOvAML <- read.delim('voom_KOvAML.txt', header=TRUE) 
+KOvAML <- KOvAML[order(KOvAML$GeneID),]
+#
+threshold <- 0.05
+> changing.both <- KOvAML$adj.P.Val < threshold & WTvKO$adj.P.Val < threshold &
+  +
+  >
+  +
+  >
+  >
+  >#
+  > fit2 <- contrasts.fit(lmv.fit, con=makeContrasts(WT-KO, levels=design)) > fit2 <- eBayes(fit2, robust=TRUE)
+> result <- topTable(fit2, n=Inf, confint=0.95)
+> result <- result[order(as.integer(result$GeneID)),]
+> not.de <- result$CI.R < 1 & result$CI.L > -1 & result$adj.P.Val > threshold
+> aml.only <- sign(KOvAML$logFC)==sign(WTvAML$logFC) & KOvAML$adj.P.Val < threshold & WTvAML$adj.P.Val < threshold & not.de
+> recorded.aml <- data.frame(KOvAML[,c('GeneID', 'Symbol')], WTtoKO=-WTvKO$logFC,
+                             + KOtoAML=-KOvAML$logFC, adj.P.Val=pmax(KOvAML$adj.P.Val, WTvAML$adj.P.Val))[aml.only,]
+> write.table(file='aml_up.tsv', recorded.aml[recorded.aml$KOtoAML > 0,], row.names=FALSE, sep='\t', quote=FALSE)
+> write.table(file='aml_down.tsv', recorded.aml[recorded.aml$KOtoAML < 0,], row.names=FALSE, sep='\t', quote=FALSE) >#
+  > fit2 <- contrasts.fit(lmv.fit, con=c(0, 1, 0))
+> fit2 <- eBayes(fit2, robust=TRUE)
+> result <- topTable(fit2, n=Inf, confint=0.95)
+> result <- result[order(as.integer(result$GeneID)),]
+> not.de <- result$CI.R < 1 & result$CI.L > -1 & result$adj.P.Val > threshold
+> ko.only <- sign(WTvKO$logFC)==sign(WTvAML$logFC) & WTvKO$adj.P.Val < threshold & WTvAML$adj.P.Val < threshold & not.de
+> recorded.ko <- data.frame(KOvAML[,c('GeneID', 'Symbol')], WTtoKO=-WTvKO$logFC,
+                            + KOtoAML=-KOvAML$logFC, adj.P.Val=pmax(WTvKO$adj.P.Val, WTvAML$adj.P.Val))[ko.only,]
+> write.table(file='ko_up.tsv', recorded.ko[recorded.ko$WTtoKO > 0,], row.names=FALSE, sep='\t', quote=FALSE)
+> write.table(file='ko_down.tsv', recorded.ko[recorded.ko$WTtoKO < 0,], row.names=FALSE, sep='\t', quote=FALSE)
+
+#10 heatmap for DE pattern identification
+blah <- read.delim('voom_All.txt', header=TRUE, stringsAsFactors=FALSE)
+all.de <- list(blah$Symbol[1:500])
+
+all.symbols <- attr(orig.counts, 'symbol', exact=TRUE) > keep <- lapply(all.de, FUN=match, table=all.symbols) > for (x in 1:length(keep)) {
+       lost <- is.na(keep[[x]])
+       print(all.de[[x]][lost])
+       all.de[[x]] <- all.de[[x]][!lost]
+   keep[[x]] <- keep[[x]][!lost] 
+  }
+all.keep <- unlist(keep)
+every.g <- DGEList(orig.counts[all.keep,], lib.size=all.g$samples$lib.size, + norm.fac=all.g$samples$norm.factors)
+rownames(every.g) <- all.symbols[all.keep]
+
+heat.ab <- cpm(every.g, prior.count=3, log=TRUE)
+heat.ab <- heat.ab - rowMeans(heat.ab)
+
+rowseps <- cumsum(sapply(all.de, FUN=length))
+> last <- 0L
+> re.heat <- list()
+> for (x in all.de) {
+  +
+    +
+    +
+    +
+    + 
+    }
+     re.heat[[length(re.heat)+1L]] <- current
+     last <- last + length(x)
+}
+heat.ab <- do.call(rbind, re.heat)
+
+lwid <- c(4, 0.3*ncol(heat.ab) + 2)
+lhei <- c(2, 0.2*nrow(heat.ab) + 2)
+cur.fname <- "plots-rnaseq/heat_anova.pdf"
+pdf(cur.fname, height=sum(lhei), width=sum(lwid))
+require(gplots)
+heatmap.2(heat.ab, dendrogram="none", trace="none", density.info="none",
+             col=bluered, cexCol=1.2, symbreaks=TRUE, breaks=100, lwid=lwid, lhei=lhei, cexRow=1.2,
+                 rowsep=rowseps, Colv = FALSE, Rowv=FALSE, sepwidth=c(0.2, 0.2), margin=c(10, 10))
+dev.off()
+----------------------------------------------------
+
+
+
+
+
+
